@@ -21,7 +21,6 @@ const byte chip_select = 4; // For SD card
 const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
 const byte hyd_set_pin = 5; //Pwr set pin to HYDROS21
 const byte hyd_unset_pin = 6; //Pwr unset pin to HYDROS21
-const byte temp_pwr = 10;
 const byte temp_pin = 9;
 
 
@@ -129,6 +128,8 @@ int send_hourly_data()
   // Start the serial port connected to the satellite modem
   IridiumSerial.begin(19200);
 
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+
   // Begin satellite modem operation
   err = modem.begin();
   if (err != ISBD_SUCCESS)
@@ -166,7 +167,7 @@ int send_hourly_data()
   uint8_t dt_buffer[340];
   int buff_idx = 0;
 
-  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data  
+  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
   String datestamp = "AB:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
   //Populate buffer with datestamp
@@ -243,9 +244,10 @@ int send_hourly_data()
   digitalWrite(led, HIGH);
   //transmit binary buffer data via iridium
   err = modem.sendSBDBinary(dt_buffer, buff_idx);
-  if(err!=0)
+  if (err != 0 && err != 13)
   {
-    modem.begin();
+    err = modem.begin();
+    modem.adjustSendReceiveTimeout(500);
     err = modem.sendSBDBinary(dt_buffer, buff_idx);
   }
   digitalWrite(led, LOW);
@@ -270,7 +272,10 @@ int send_hourly_data()
 
 
   //Remove previous daily values CSV
-  SD.remove("/HOURLY.CSV");
+  if (err == 0 || err == 13)
+  {
+    SD.remove("/HOURLY.CSV");
+  }
 
   return err;
 
@@ -280,21 +285,21 @@ int send_hourly_data()
 //Function for obtaining mean water level from n sensor readings of DFRobot level sensor
 int avgWaterLevl(int n)
 {
-  //Switch 12V power to level sensor on 
+  //Switch 12V power to level sensor on
   digitalWrite(hyd_set_pin, HIGH);
   delay(30);
-  digitalWrite(hyd_set_pin,LOW);
+  digitalWrite(hyd_set_pin, LOW);
 
   //Allow warm up
   delay(1000);
-  
+
   float avg_current = 0.0;
 
   for (int i = 0; i < n; i++)
   {
 
     float level_value = (float) analogRead(h2o_level_pin);
-    
+
     //Read voltage output of H2O level sensor
     float level_voltage =  level_value * (vref / 4095.0);
 
@@ -312,10 +317,10 @@ int avgWaterLevl(int n)
   //Calculate water depth (mm) from current readings (see datasheet)
   float depth = (avg_current - init_current) * (range / density_water / 16.0);
 
-  //Switch power to level sensor off 
+  //Switch power to level sensor off
   digitalWrite(hyd_unset_pin, HIGH);
   delay(30);
-  digitalWrite(hyd_unset_pin,LOW);
+  digitalWrite(hyd_unset_pin, LOW);
 
 
   return round(depth);
@@ -339,10 +344,8 @@ void setup(void)
   digitalWrite(hyd_unset_pin, HIGH);
   delay(30);
   digitalWrite(hyd_unset_pin, LOW);
-  pinMode(temp_pwr,OUTPUT);
-  digitalWrite(temp_pwr,HIGH);
-  pinMode(temp_pin,INPUT);
-  pinMode(h2o_level_pin,INPUT);
+  pinMode(temp_pin, INPUT);
+  pinMode(h2o_level_pin, INPUT);
   analogReadResolution(12);
 
 
@@ -377,20 +380,20 @@ void setup(void)
   sample_n = (int16_t*)cp["sample_n"];
 
 
-  //Sleep time between samples in minutes
-  sleep_time = sample_intvl[0] * 60000;
+  //Sleep time between samples in seconds
+  sleep_time = sample_intvl[0] * 1000;
 
-  //Log file name 
+  //Log file name
   filestr = String(filename[0]);
 
   //Iridium transmission frequency
   irid_freq_hrs = irid_freq[0];
 
-  //Get logging start time from parameter file 
-  int start_hour = String(start_time[0]).substring(0,3).toInt();
-  int start_minute = String(start_time[0]).substring(3,5).toInt();
-  int start_second = String(start_time[0]).substring(6,8).toInt();
-  
+  //Get logging start time from parameter file
+  int start_hour = String(start_time[0]).substring(0, 3).toInt();
+  int start_minute = String(start_time[0]).substring(3, 5).toInt();
+  int start_second = String(start_time[0]).substring(6, 8).toInt();
+
   // Make sure RTC is available
   while (!rtc.begin())
   {
@@ -401,7 +404,7 @@ void setup(void)
   }
 
   // Start up the DallasTemp library
-  
+
   sensors.begin();
 
   present_time = rtc.now();
@@ -412,10 +415,10 @@ void setup(void)
                            start_minute,
                            start_second);
 
-//  while(rtc.now()<DateTime(present_time.year(),present_time.month(),start_hour,start_minute,start_second))
-//  {
-//    delay(100);
-//  }
+  //  while(rtc.now()<DateTime(present_time.year(),present_time.month(),start_hour,start_minute,start_second))
+  //  {
+  //    delay(100);
+  //  }
 
 
 
@@ -434,25 +437,26 @@ void loop(void)
   if (present_time >= transmit_time)
   {
     int send_status = send_hourly_data();
-    
+
     //Update next Iridium transmit time by 'irid_freq_hrs'
-    transmit_time = (transmit_time + TimeSpan(0,irid_freq_hrs, 0, 0));
+    transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));
 
   }
 
-  digitalWrite(temp_pwr,HIGH);
-  delay(200);
   //Ping DS18B20
+  sensors.begin();
+  delay(750);
   sensors.requestTemperatures();
+  delay(500);
   float temp_c = sensors.getTempCByIndex(0);
-  digitalWrite(temp_pwr,LOW);
+
 
   int h2o_level = avgWaterLevl(10);
 
   //Sample the HYDROS21 sensor for a reading
   String datastring = gen_date_str(present_time) + String(h2o_level) + "," + String(temp_c);
 
-  
+
 
   //Write header if first time writing to the logfile
   if (!SD.exists(filestr.c_str()))
