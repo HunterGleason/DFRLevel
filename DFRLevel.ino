@@ -16,7 +16,7 @@ const float range = 5000.0; // Depth measuring range 5000mm (for water)
 const float density_water = 1.00;  // Pure water density assumed to be 1
 const float vref = 3300.0;
 const float init_current = 4.00;
-const byte led = 13; // Built in LED pin
+const byte led = 13; // Built in led pin
 const byte chip_select = 4; // For SD card
 const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
 const byte hyd_set_pin = 5; //Pwr set pin to HYDROS21
@@ -58,80 +58,24 @@ DallasTemperature sensors(&oneWire);
 
 
 
-
-/*Function pings RTC for datetime and returns formated datestamp YYYY-MM-DD HH:MM:SS*/
-String gen_date_str(DateTime now) {
-
-  //Format current date time values for writing to SD
-  String yr_str = String(now.year());
-  String mnth_str;
-  if (now.month() >= 10)
-  {
-    mnth_str = String(now.month());
-  } else {
-    mnth_str = "0" + String(now.month());
-  }
-
-  String day_str;
-  if (now.day() >= 10)
-  {
-    day_str = String(now.day());
-  } else {
-    day_str = "0" + String(now.day());
-  }
-
-  String hr_str;
-  if (now.hour() >= 10)
-  {
-    hr_str = String(now.hour());
-  } else {
-    hr_str = "0" + String(now.hour());
-  }
-
-  String min_str;
-  if (now.minute() >= 10)
-  {
-    min_str = String(now.minute());
-  } else {
-    min_str = "0" + String(now.minute());
-  }
-
-
-  String sec_str;
-  if (now.second() >= 10)
-  {
-    sec_str = String(now.second());
-  } else {
-    sec_str = "0" + String(now.second());
-  }
-
-  //Assemble a consistently formatted date string for logging to SD or sending or IRIDIUM modem
-  String datestring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + ",";
-
-  return datestring;
-}
-
 /*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
    since the previous transmission over satellite at midnight on the RTC.
 */
 int send_hourly_data()
 {
 
-  //For capturing Iridium errors
+  // For capturing Iridium errors
   int err;
 
-  //Provide power to Iridium Modem
+  // Provide power to Iridium Modem
   digitalWrite(irid_pwr_pin, HIGH);
+  // Allow warm up
   delay(200);
 
 
   // Start the serial port connected to the satellite modem
   IridiumSerial.begin(19200);
 
-  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
-
-  // Begin satellite modem operation
-  err = modem.begin();
   if (err != ISBD_SUCCESS)
   {
     digitalWrite(led, HIGH);
@@ -146,17 +90,19 @@ int send_hourly_data()
 
 
 
-  //Set paramters for parsing the log file
+  // Set paramters for parsing the log file
   CSV_Parser cp("sdf", true, ',');
 
-  //Varibles for holding data fields
+  // Varibles for holding data fields
   char **datetimes;
   int16_t *h2o_depths;
   float *h2o_temps;
 
-  //Read IRID.CSV
+
+  // Read HOURLY.CSV file
   cp.readSDfile("/HOURLY.CSV");
 
+  int num_rows = cp.getRowsCount();
 
   //Populate data arrays from logfile
   datetimes = (char**)cp["datetime"];
@@ -165,6 +111,8 @@ int send_hourly_data()
 
   //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
   uint8_t dt_buffer[340];
+
+  //Buffer index counter var
   int buff_idx = 0;
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
@@ -177,25 +125,50 @@ int send_hourly_data()
     buff_idx++;
   }
 
-  //For each hour 0-23
-  for (int day_hour = 0; day_hour < 24; day_hour++)
+  //Get start and end date information from HOURLY.CSV time series data
+  int start_year = String(datetimes[0]).substring(0, 4).toInt();
+  int start_month = String(datetimes[0]).substring(5, 7).toInt();
+  int start_day = String(datetimes[0]).substring(8, 10).toInt();
+  int start_hour = String(datetimes[0]).substring(11, 13).toInt();
+  int end_year = String(datetimes[num_rows - 1]).substring(0, 4).toInt();
+  int end_month = String(datetimes[num_rows - 1]).substring(5, 7).toInt();
+  int end_day = String(datetimes[num_rows - 1]).substring(8, 10).toInt();
+  int end_hour = String(datetimes[num_rows - 1]).substring(11, 13).toInt();
+
+  //Set the start time to rounded first datetime hour in CSV
+  DateTime start_dt = DateTime(start_year, start_month, start_day, start_hour, 0, 0);
+  //Set the end time to end of last datetime hour in CSV
+  DateTime end_dt = DateTime(end_year, end_month, end_day, end_hour + 1, 0, 0);
+  //For keeping track of the datetime at the end of each hourly interval
+  DateTime intvl_dt;
+
+  while (start_dt < end_dt)
   {
 
+    intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);
+
     //Declare average vars for each HYDROS21 output
-    float mean_depth = 999.0;
-    float mean_temp = 999.0;
-    boolean is_obs = false;
+    float mean_depth = -9999.0;
+    float mean_temp = -9999.0;
+    boolean is_first_obs = false;
     int N = 0;
 
     //For each observation in the HOURLY.CSV
-    for (int i = 0; i < cp.getRowsCount(); i++) {
+    for (int i = 0; i < num_rows; i++) {
 
       //Read the datetime and hour
       String datetime = String(datetimes[i]);
+      int dt_year = datetime.substring(0, 4).toInt();
+      int dt_month = datetime.substring(5, 7).toInt();
+      int dt_day = datetime.substring(8, 10).toInt();
       int dt_hour = datetime.substring(11, 13).toInt();
+      int dt_min = datetime.substring(14, 16).toInt();
+      int dt_sec = datetime.substring(17, 19).toInt();
 
-      //If the hour matches day hour
-      if (dt_hour == day_hour)
+      DateTime obs_dt = DateTime(dt_year, dt_month, dt_day, dt_hour, dt_min, dt_sec);
+
+      //Check in the current observatioin falls withing time window
+      if (obs_dt >= start_dt && obs_dt <= intvl_dt)
       {
 
         //Get data
@@ -203,12 +176,12 @@ int send_hourly_data()
         float h2o_temp = h2o_temps[i];
 
         //Check if this is the first observation for the hour
-        if (is_obs == false)
+        if (is_first_obs == false)
         {
           //Update average vars
           mean_depth = h2o_depth;
           mean_temp = h2o_temp;
-          is_obs = true;
+          is_first_obs = true;
           N++;
         } else {
           //Update average vars
@@ -224,12 +197,13 @@ int send_hourly_data()
     if (N > 0)
     {
       //Compute averages
-      mean_depth = mean_depth / N;
-      mean_temp = (mean_temp / N) * 10.0;
+      mean_depth = (mean_depth / (float) N);
+      mean_temp = (mean_temp / (float) N) * 10.0;
 
 
-      //Assemble the data string, no EC for now
-      String datastring = String(round(mean_depth)) + ',' + String(round(mean_temp)) + ':';
+      //Assemble the data string
+      String datastring = String(round(mean_depth)) + "," + String(round(mean_temp)) + ':';
+
 
       //Populate the buffer with the datastring
       for (int i = 0; i < datastring.length(); i++)
@@ -237,50 +211,56 @@ int send_hourly_data()
         dt_buffer[buff_idx] = datastring.charAt(i);
         buff_idx++;
       }
+
     }
+
+    start_dt = intvl_dt;
+
   }
 
-  //Indicate the modem is trying to send
+  // Prevent from trying to charge to quickly, low current setup
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+
+  // Begin satellite modem operation, blink led (1-sec) if there was an issue
+  err = modem.begin();
+
+  if (err == ISBD_IS_ASLEEP)
+  {
+    modem.begin();
+  }
+
+  //Indicate the modem is trying to send with led
   digitalWrite(led, HIGH);
+
   //transmit binary buffer data via iridium
   err = modem.sendSBDBinary(dt_buffer, buff_idx);
-  if (err != 0 && err != 13)
+
+  //If transmission failed and message is not too large try once more, increase time out
+  if (err != ISBD_SUCCESS && err != 13)
   {
     err = modem.begin();
     modem.adjustSendReceiveTimeout(500);
     err = modem.sendSBDBinary(dt_buffer, buff_idx);
+
   }
+
   digitalWrite(led, LOW);
 
-  //Indicate the ISBD_SUCCESS
-  if (err != ISBD_SUCCESS)
-  {
-    digitalWrite(led, HIGH);
-    delay(5000);
-    digitalWrite(led, LOW);
-    delay(5000);
-    digitalWrite(led, HIGH);
-    delay(5000);
-    digitalWrite(led, LOW);
-    delay(5000);
-  }
 
-
-  //Kill power to Iridium Modem
+  //Kill power to Iridium Modem by writing the base pin low on PN2222 transistor
   digitalWrite(irid_pwr_pin, LOW);
   delay(30);
 
 
-  //Remove previous daily values CSV
-  if (err == 0 || err == 13)
-  {
-    SD.remove("/HOURLY.CSV");
-  }
+  //Remove previous daily values CSV as long as send was succesfull, or if message is more than 340 bites
+
+  SD.remove("/HOURLY.CSV");
 
   return err;
 
 
 }
+
 
 //Function for obtaining mean water level from n sensor readings of DFRobot level sensor
 int avgWaterLevl(int n)
@@ -350,7 +330,7 @@ void setup(void)
 
 
 
-  //Make sure a SD is available (1-sec flash LED means SD card did not initialize)
+  //Make sure a SD is available (1-sec flash led means SD card did not initialize)
   while (!SD.begin(chip_select)) {
     digitalWrite(led, HIGH);
     delay(2000);
@@ -415,10 +395,6 @@ void setup(void)
                            start_minute,
                            start_second);
 
-  //  while(rtc.now()<DateTime(present_time.year(),present_time.month(),start_hour,start_minute,start_second))
-  //  {
-  //    delay(100);
-  //  }
 
 
 
@@ -454,8 +430,7 @@ void loop(void)
   int h2o_level = avgWaterLevl(10);
 
   //Sample the HYDROS21 sensor for a reading
-  String datastring = gen_date_str(present_time) + String(h2o_level) + "," + String(temp_c);
-
+  String datastring = present_time.timestamp() + "," + String(h2o_level) + "," + String(temp_c);
 
 
   //Write header if first time writing to the logfile
@@ -502,7 +477,7 @@ void loop(void)
     }
   }
 
-  //Flash LED to idicate a sample was just taken
+  //Flash led to idicate a sample was just taken
   digitalWrite(led, HIGH);
   delay(250);
   digitalWrite(led, LOW);
