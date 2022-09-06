@@ -21,7 +21,7 @@ const byte chip_select = 4; // For SD card
 const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
 const byte hyd_set_pin = 5; //Pwr set pin to HYDROS21
 const byte hyd_unset_pin = 6; //Pwr unset pin to HYDROS21
-const byte temp_pin = 9;
+const byte temp_pin = 12;
 
 
 /*Define global vars */
@@ -327,7 +327,7 @@ void setup(void)
   pinMode(temp_pin, INPUT);
   pinMode(h2o_level_pin, INPUT);
   analogReadResolution(12);
-
+  pinMode(9,OUTPUT);
 
 
   //Make sure a SD is available (1-sec flash led means SD card did not initialize)
@@ -420,11 +420,14 @@ void loop(void)
   }
 
   //Ping DS18B20
+  digitalWrite(9,HIGH);
+  delay(100);
   sensors.begin();
   delay(750);
   sensors.requestTemperatures();
   delay(500);
   float temp_c = sensors.getTempCByIndex(0);
+  digitalWrite(9,LOW);
 
 
   int h2o_level = avgWaterLevl(10);
