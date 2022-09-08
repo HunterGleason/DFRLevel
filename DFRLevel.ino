@@ -1,27 +1,27 @@
-
-
 /*Include the libraries we need*/
 #include "RTClib.h" //Needed for communication with Real Time Clock
 #include <SPI.h>//Needed for working with SD card
 #include <SD.h>//Needed for working with SD card
-#include "ArduinoLowPower.h"//Needed for putting Feather M0 to sleep between samples
+#include <ArduinoLowPower.h>//Needed for putting Feather M0 to sleep between samples
 #include <IridiumSBD.h>//Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h>//Needed for parsing CSV data
-#include <OneWire.h>
-#include <DallasTemperature.h>
+#include <OneWire.h>//Needed for communication with DS18B20
+#include <DallasTemperature.h>//Needed for communication with DS18B20
+#include <QuickStats.h>//Needed for computing median 
 
 /*Define global constants*/
-const byte h2o_level_pin = A1;
+const byte h2o_level_pin = A1;//Pin for taking analog reading of DFR current-to-voltage converter
 const float range = 5000.0; // Depth measuring range 5000mm (for water)
 const float density_water = 1.00;  // Pure water density assumed to be 1
-const float vref = 3300.0;
-const float init_current = 4.00;
+const float vref = 3300.0; //Reference voltage in mV of MCU Vcc
+const float init_current = 4.00; //Inital current in mA of probe out of water (from DFR datasheet)
 const byte led = 13; // Built in led pin
 const byte chip_select = 4; // For SD card
 const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
-const byte hyd_set_pin = 5; //Pwr set pin to HYDROS21
-const byte hyd_unset_pin = 6; //Pwr unset pin to HYDROS21
-const byte temp_pin = 12;
+const byte hyd_set_pin = 5; //Pwr set pin to DFR probe
+const byte hyd_unset_pin = 6; //Pwr unset pin to DFR probe
+const byte temp_pin = 12;//Data pin for DS18B20
+const byte temp_pwr_pin = 9;//Pwr pin for DS18B20
 
 
 /*Define global vars */
@@ -29,21 +29,18 @@ char **filename; //Name of log file
 char **start_time;//Time at which logging begins
 String filestr; //Filename as string
 int16_t *sample_intvl; //Sample interval in minutes
-int16_t *site_id; //User provided site ID # for PostgreSQL database
-int16_t *irid_freq;
-uint32_t irid_freq_hrs;
+int16_t *irid_freq;//Iridium transmit freqency in hours
+uint32_t irid_freq_hrs;///Iridium transmit freqency in hours
 uint32_t sleep_time;//Logger sleep time in milliseconds
 DateTime transmit_time;//Datetime varible for keeping IRIDIUM transmit time
 DateTime present_time;//Var for keeping the current time
 int err; //IRIDIUM status var
-int16_t data_voltage;
-float data_current, depth; //unit:mA
-int16_t *sample_n;
+float data_current, depth; //Vars for computing water depth from analog voltage
+int16_t *sample_n;//Number of water depth samples to take median of per reading
 
 
 /*Define Iridium seriel communication COM1*/
 #define IridiumSerial Serial1
-
 
 /*Create library instances*/
 RTC_PCF8523 rtc; // Setup a PCF8523 Real Time Clock instance
@@ -56,7 +53,7 @@ OneWire oneWire(temp_pin);
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
 
-
+QuickStats stats;
 
 /*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
    since the previous transmission over satellite at midnight on the RTC.
@@ -271,9 +268,9 @@ int avgWaterLevl(int n)
   digitalWrite(hyd_set_pin, LOW);
 
   //Allow warm up
-  delay(1000);
+  delay(2000);
 
-  float avg_current = 0.0;
+  float values[n];
 
   for (int i = 0; i < n; i++)
   {
@@ -286,16 +283,16 @@ int avgWaterLevl(int n)
     //Convert to current
     float level_current = level_voltage / 120.0; //Sense Resistor:120ohm
 
-    avg_current = avg_current + level_current;
+    values[n] = level_current;
 
-    delay(250);
+    delay(10);
 
   }
 
-  avg_current = avg_current / (float) n;
+  float median_current = stats.median(values, n);
 
   //Calculate water depth (mm) from current readings (see datasheet)
-  float depth = (avg_current - init_current) * (range / density_water / 16.0);
+  float depth = (median_current - init_current) * (range / density_water / 16.0);
 
   //Switch power to level sensor off
   digitalWrite(hyd_unset_pin, HIGH);
@@ -326,8 +323,9 @@ void setup(void)
   digitalWrite(hyd_unset_pin, LOW);
   pinMode(temp_pin, INPUT);
   pinMode(h2o_level_pin, INPUT);
+  pinMode(temp_pwr_pin, OUTPUT);
+
   analogReadResolution(12);
-  pinMode(9,OUTPUT);
 
 
   //Make sure a SD is available (1-sec flash led means SD card did not initialize)
@@ -420,17 +418,16 @@ void loop(void)
   }
 
   //Ping DS18B20
-  digitalWrite(9,HIGH);
+  digitalWrite(temp_pwr_pin, HIGH);
   delay(100);
   sensors.begin();
   delay(750);
   sensors.requestTemperatures();
-  delay(500);
   float temp_c = sensors.getTempCByIndex(0);
-  digitalWrite(9,LOW);
+  digitalWrite(temp_pwr_pin, LOW);
 
 
-  int h2o_level = avgWaterLevl(10);
+  int h2o_level = avgWaterLevl(sample_n[0]);
 
   //Sample the HYDROS21 sensor for a reading
   String datastring = present_time.timestamp() + "," + String(h2o_level) + "," + String(temp_c);
