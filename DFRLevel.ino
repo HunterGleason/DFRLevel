@@ -7,19 +7,11 @@
 #include <CSV_Parser.h>//Needed for parsing CSV data
 #include <OneWire.h>//Needed for communication with DS18B20
 #include <DallasTemperature.h>//Needed for communication with DS18B20
-#include <QuickStats.h>//Needed for computing median 
 
 /*Define global constants*/
-const byte h2o_level_pin = A1;//Pin for taking analog reading of DFR current-to-voltage converter
-const float range = 5000.0; // Depth measuring range 5000mm (for water)
-const float density_water = 1.00;  // Pure water density assumed to be 1
-const float vref = 3300.0; //Reference voltage in mV of MCU Vcc
-const float init_current = 4.00; //Inital current in mA of probe out of water (from DFR datasheet)
 const byte led = 13; // Built in led pin
 const byte chip_select = 4; // For SD card
 const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
-const byte hyd_set_pin = 5; //Pwr set pin to DFR probe
-const byte hyd_unset_pin = 6; //Pwr unset pin to DFR probe
 const byte temp_pin = 12;//Data pin for DS18B20
 const byte temp_pwr_pin = 9;//Pwr pin for DS18B20
 
@@ -35,8 +27,6 @@ uint32_t sleep_time;//Logger sleep time in milliseconds
 DateTime transmit_time;//Datetime varible for keeping IRIDIUM transmit time
 DateTime present_time;//Var for keeping the current time
 int err; //IRIDIUM status var
-float data_current, depth; //Vars for computing water depth from analog voltage
-int16_t *sample_n;//Number of water depth samples to take median of per reading
 
 
 /*Define Iridium seriel communication COM1*/
@@ -53,7 +43,6 @@ OneWire oneWire(temp_pin);
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
 
-QuickStats stats;
 
 /*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
    since the previous transmission over satellite at midnight on the RTC.
@@ -88,11 +77,10 @@ int send_hourly_data()
 
 
   // Set paramters for parsing the log file
-  CSV_Parser cp("sdf", true, ',');
+  CSV_Parser cp("sf", true, ',');
 
   // Varibles for holding data fields
   char **datetimes;
-  int16_t *h2o_depths;
   float *h2o_temps;
 
 
@@ -103,7 +91,6 @@ int send_hourly_data()
 
   //Populate data arrays from logfile
   datetimes = (char**)cp["datetime"];
-  h2o_depths = (int16_t*)cp["h2o_depth_mm"];
   h2o_temps = (float*)cp["h2o_temp_deg_c"];
 
   //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
@@ -113,7 +100,7 @@ int send_hourly_data()
   int buff_idx = 0;
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datestamp = "AB:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datestamp = "B:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
   //Populate buffer with datestamp
   for (int i = 0; i < datestamp.length(); i++)
@@ -145,7 +132,6 @@ int send_hourly_data()
     intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);
 
     //Declare average vars for each HYDROS21 output
-    float mean_depth = -9999.0;
     float mean_temp = -9999.0;
     boolean is_first_obs = false;
     int N = 0;
@@ -169,20 +155,17 @@ int send_hourly_data()
       {
 
         //Get data
-        float h2o_depth = (float) h2o_depths[i];
         float h2o_temp = h2o_temps[i];
 
         //Check if this is the first observation for the hour
         if (is_first_obs == false)
         {
           //Update average vars
-          mean_depth = h2o_depth;
           mean_temp = h2o_temp;
           is_first_obs = true;
           N++;
         } else {
           //Update average vars
-          mean_depth = mean_depth + h2o_depth;
           mean_temp = mean_temp + h2o_temp;
           N++;
         }
@@ -194,12 +177,11 @@ int send_hourly_data()
     if (N > 0)
     {
       //Compute averages
-      mean_depth = (mean_depth / (float) N);
       mean_temp = (mean_temp / (float) N) * 10.0;
 
 
       //Assemble the data string
-      String datastring = String(round(mean_depth)) + "," + String(round(mean_temp)) + ':';
+      String datastring = String(round(mean_temp)) + ':';
 
 
       //Populate the buffer with the datastring
@@ -259,51 +241,6 @@ int send_hourly_data()
 }
 
 
-//Function for obtaining mean water level from n sensor readings of DFRobot level sensor
-int avgWaterLevl(int n)
-{
-  //Switch 12V power to level sensor on
-  digitalWrite(hyd_set_pin, HIGH);
-  delay(30);
-  digitalWrite(hyd_set_pin, LOW);
-
-  //Allow warm up
-  delay(2000);
-
-  float values[n];
-
-  for (int i = 0; i < n; i++)
-  {
-
-    float level_value = (float) analogRead(h2o_level_pin);
-
-    //Read voltage output of H2O level sensor
-    float level_voltage =  level_value * (vref / 4095.0);
-
-    //Convert to current
-    float level_current = level_voltage / 120.0; //Sense Resistor:120ohm
-
-    values[n] = level_current;
-
-    delay(10);
-
-  }
-
-  float median_current = stats.median(values, n);
-
-  //Calculate water depth (mm) from current readings (see datasheet)
-  float depth = (median_current - init_current) * (range / density_water / 16.0);
-
-  //Switch power to level sensor off
-  digitalWrite(hyd_unset_pin, HIGH);
-  delay(30);
-  digitalWrite(hyd_unset_pin, LOW);
-
-
-  return round(depth);
-
-}
-
 
 /*
    The setup function. We only start the sensors, RTC and SD here
@@ -315,18 +252,8 @@ void setup(void)
   digitalWrite(irid_pwr_pin, LOW);
   pinMode(led, OUTPUT);
   digitalWrite(led, LOW);
-  pinMode(hyd_set_pin, OUTPUT);
-  digitalWrite(hyd_set_pin, LOW);
-  pinMode(hyd_unset_pin, OUTPUT);
-  digitalWrite(hyd_unset_pin, HIGH);
-  delay(30);
-  digitalWrite(hyd_unset_pin, LOW);
   pinMode(temp_pin, INPUT);
-  pinMode(h2o_level_pin, INPUT);
   pinMode(temp_pwr_pin, OUTPUT);
-
-  analogReadResolution(12);
-
 
   //Make sure a SD is available (1-sec flash led means SD card did not initialize)
   while (!SD.begin(chip_select)) {
@@ -337,7 +264,7 @@ void setup(void)
   }
 
   //Set paramters for parsing the log file
-  CSV_Parser cp("sddsd", true, ',');
+  CSV_Parser cp("sdds", true, ',');
 
 
   //Read IRID.CSV
@@ -355,7 +282,6 @@ void setup(void)
   sample_intvl = (int16_t*)cp["sample_intvl"];
   irid_freq = (int16_t*)cp["irid_freq"];
   start_time = (char**)cp["start_time"];
-  sample_n = (int16_t*)cp["sample_n"];
 
 
   //Sleep time between samples in seconds
@@ -427,10 +353,8 @@ void loop(void)
   digitalWrite(temp_pwr_pin, LOW);
 
 
-  int h2o_level = avgWaterLevl(sample_n[0]);
-
   //Sample the HYDROS21 sensor for a reading
-  String datastring = present_time.timestamp() + "," + String(h2o_level) + "," + String(temp_c);
+  String datastring = present_time.timestamp() + "," + String(temp_c);
 
 
   //Write header if first time writing to the logfile
@@ -439,7 +363,7 @@ void loop(void)
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,h2o_depth_mm,h2o_temp_deg_c");
+      dataFile.println("datetime,h2o_temp_deg_c");
       dataFile.close();
     }
 
@@ -464,7 +388,7 @@ void loop(void)
     dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,h2o_depth_mm,h2o_temp_deg_c");
+      dataFile.println("datetime,h2o_temp_deg_c");
       dataFile.close();
     }
   } else {
