@@ -10,7 +10,7 @@
 #include <QuickStats.h>//Needed for computing median 
 
 /*Define global constants*/
-const byte h2o_level_pin = A3;//Pin for taking analog reading of DFR current-to-voltage converter
+const byte h2o_level_pin = A1;//Pin for taking analog reading of DFR current-to-voltage converter
 const float range = 5000.0; // Depth measuring range 5000mm (for water)
 const float density_water = 1.00;  // Pure water density assumed to be 1
 const float vref = 3300.0; //Reference voltage in mV of MCU Vcc
