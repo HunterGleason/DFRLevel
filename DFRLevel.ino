@@ -10,7 +10,7 @@
 #include <QuickStats.h>//Needed for computing median 
 
 /*Define global constants*/
-const byte h2o_level_pin = A1;//Pin for taking analog reading of DFR current-to-voltage converter
+const byte h2o_level_pin = A3;//Pin for taking analog reading of DFR current-to-voltage converter
 const float range = 5000.0; // Depth measuring range 5000mm (for water)
 const float density_water = 1.00;  // Pure water density assumed to be 1
 const float vref = 3300.0; //Reference voltage in mV of MCU Vcc
@@ -28,10 +28,11 @@ const byte temp_pwr_pin = 9;//Pwr pin for DS18B20
 char **filename; //Name of log file
 char **start_time;//Time at which logging begins
 String filestr; //Filename as string
-int16_t *sample_intvl; //Sample interval in minutes
+int16_t *sample_intvl; //Sample interval in seconds
 int16_t *irid_freq;//Iridium transmit freqency in hours
 uint32_t irid_freq_hrs;///Iridium transmit freqency in hours
 uint32_t sleep_time;//Logger sleep time in milliseconds
+uint32_t sample_n_;//Sample interval in seconds 
 DateTime transmit_time;//Datetime varible for keeping IRIDIUM transmit time
 DateTime present_time;//Var for keeping the current time
 int err; //IRIDIUM status var
@@ -260,7 +261,7 @@ int send_hourly_data()
 
 
 //Function for obtaining mean water level from n sensor readings of DFRobot level sensor
-int avgWaterLevl(int n)
+int avgWaterLevl(uint32_t n)
 {
   //Switch 12V power to level sensor on
   digitalWrite(hyd_set_pin, HIGH);
@@ -283,7 +284,7 @@ int avgWaterLevl(int n)
     //Convert to current
     float level_current = level_voltage / 120.0; //Sense Resistor:120ohm
 
-    values[n] = level_current;
+    values[i] = level_current;
 
     delay(10);
 
@@ -367,6 +368,8 @@ void setup(void)
   //Iridium transmission frequency
   irid_freq_hrs = irid_freq[0];
 
+  sample_n_ = sample_n[0];
+
   //Get logging start time from parameter file
   int start_hour = String(start_time[0]).substring(0, 3).toInt();
   int start_minute = String(start_time[0]).substring(3, 5).toInt();
@@ -426,8 +429,7 @@ void loop(void)
   float temp_c = sensors.getTempCByIndex(0);
   digitalWrite(temp_pwr_pin, LOW);
 
-
-  int h2o_level = avgWaterLevl(sample_n[0]);
+  int h2o_level = avgWaterLevl(sample_n_);
 
   //Sample the HYDROS21 sensor for a reading
   String datastring = present_time.timestamp() + "," + String(h2o_level) + "," + String(temp_c);
