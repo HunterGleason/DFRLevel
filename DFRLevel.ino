@@ -11,7 +11,7 @@
 /*Define global constants*/
 const byte led = 13; // Built in led pin
 const byte chip_select = 4; // For SD card
-const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
+const byte irid_pwr_pin = 6; // Pwr pin to Iridium modem
 const byte temp_pin = 12;//Data pin for DS18B20
 const byte temp_pwr_pin = 9;//Pwr pin for DS18B20
 
