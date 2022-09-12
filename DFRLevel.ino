@@ -315,7 +315,7 @@ void setup(void)
   transmit_time = DateTime(present_time.year(),
                            present_time.month(),
                            present_time.day(),
-                           start_hour + irid_freq_hrs,
+                           start_hour,
                            start_minute,
                            start_second);
 
