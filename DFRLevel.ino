@@ -21,8 +21,8 @@ const byte irid_pwr_pin = 11; // Pwr pin to Iridium modem
 const byte hyd_set_pin = 5; //Pwr set pin to DFR probe
 const byte hyd_unset_pin = 6; //Pwr unset pin to DFR probe
 const byte temp_pin = 12;//Data pin for DS18B20
-const byte temp_pwr_pin = 9;//Pwr pin for DS18B20
-
+const byte peri_set_pin = 9;//Pwr set pin for all 3v3 periphial 
+const byte peri_unset_pin = 10;//Pwr set pin for all 3v3 periphial 
 
 /*Define global vars */
 char **filename; //Name of log file
@@ -263,10 +263,6 @@ int send_hourly_data()
 //Function for obtaining mean water level from n sensor readings of DFRobot level sensor
 int avgWaterLevl(uint32_t n)
 {
-  //Switch 12V power to level sensor on
-  digitalWrite(hyd_set_pin, HIGH);
-  delay(30);
-  digitalWrite(hyd_set_pin, LOW);
 
   //Allow warm up
   delay(2000);
@@ -295,11 +291,6 @@ int avgWaterLevl(uint32_t n)
   //Calculate water depth (mm) from current readings (see datasheet)
   float depth = (median_current - init_current) * (range / density_water / 16.0);
 
-  //Switch power to level sensor off
-  digitalWrite(hyd_unset_pin, HIGH);
-  delay(30);
-  digitalWrite(hyd_unset_pin, LOW);
-
 
   return round(depth);
 
@@ -322,9 +313,14 @@ void setup(void)
   digitalWrite(hyd_unset_pin, HIGH);
   delay(30);
   digitalWrite(hyd_unset_pin, LOW);
+  pinMode(peri_set_pin,OUTPUT);
+  pinMode(peri_unset_pin,OUTPUT);
+  digitalWrite(peri_unset_pin, HIGH);
+  delay(30);
+  digitalWrite(peri_unset_pin, LOW);
   pinMode(temp_pin, INPUT);
   pinMode(h2o_level_pin, INPUT);
-  pinMode(temp_pwr_pin, OUTPUT);
+
 
   analogReadResolution(12);
 
@@ -420,16 +416,32 @@ void loop(void)
 
   }
 
-  //Ping DS18B20
-  digitalWrite(temp_pwr_pin, HIGH);
+  //Switch 12V power to level sensor on
+  digitalWrite(hyd_set_pin, HIGH);
+  delay(30);
+  digitalWrite(hyd_set_pin, LOW);
+  //Switch 3.3V power to current-to-voltage converter 
+  digitalWrite(peri_set_pin, HIGH);
+  delay(30);
+  digitalWrite(peri_set_pin, LOW);
+
+  
   delay(100);
   sensors.begin();
   delay(750);
   sensors.requestTemperatures();
   float temp_c = sensors.getTempCByIndex(0);
-  digitalWrite(temp_pwr_pin, LOW);
 
   int h2o_level = avgWaterLevl(sample_n_);
+
+  //Switch 12V power to level sensor off
+  digitalWrite(hyd_unset_pin, HIGH);
+  delay(30);
+  digitalWrite(hyd_unset_pin, LOW);
+  //Switch 3.3V power to current-to-voltage converter off
+  digitalWrite(peri_unset_pin, HIGH);
+  delay(30);
+  digitalWrite(peri_unset_pin, LOW);
 
   //Sample the HYDROS21 sensor for a reading
   String datastring = present_time.timestamp() + "," + String(h2o_level) + "," + String(temp_c);
